@@ -31,13 +31,15 @@ var namespaceMapping = map[specs.LinuxNamespaceType]configs.NamespaceType{
 }
 
 var mountPropagationMapping = map[string]int{
-	"rprivate": unix.MS_PRIVATE | unix.MS_REC,
-	"private":  unix.MS_PRIVATE,
-	"rslave":   unix.MS_SLAVE | unix.MS_REC,
-	"slave":    unix.MS_SLAVE,
-	"rshared":  unix.MS_SHARED | unix.MS_REC,
-	"shared":   unix.MS_SHARED,
-	"":         0,
+	"rprivate":    unix.MS_PRIVATE | unix.MS_REC,
+	"private":     unix.MS_PRIVATE,
+	"rslave":      unix.MS_SLAVE | unix.MS_REC,
+	"slave":       unix.MS_SLAVE,
+	"rshared":     unix.MS_SHARED | unix.MS_REC,
+	"shared":      unix.MS_SHARED,
+	"runbindable": unix.MS_UNBINDABLE | unix.MS_REC,
+	"unbindable":  unix.MS_UNBINDABLE,
+	"":            0,
 }
 
 var allowedDevices = []*configs.Device{
@@ -190,9 +192,6 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 	if err := createDevices(spec, config); err != nil {
 		return nil, err
 	}
-	if err := setupUserNamespace(spec, config); err != nil {
-		return nil, err
-	}
 	c, err := createCgroupConfig(opts)
 	if err != nil {
 		return nil, err
@@ -222,6 +221,11 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 				{
 					Type: "loopback",
 				},
+			}
+		}
+		if config.Namespaces.Contains(configs.NEWUSER) {
+			if err := setupUserNamespace(spec, config); err != nil {
+				return nil, err
 			}
 		}
 		config.MaskPaths = spec.Linux.MaskedPaths
@@ -618,9 +622,6 @@ func setupUserNamespace(spec *specs.Spec, config *configs.Config) error {
 		}
 	}
 	if spec.Linux != nil {
-		if len(spec.Linux.UIDMappings) == 0 {
-			return nil
-		}
 		for _, m := range spec.Linux.UIDMappings {
 			config.UidMappings = append(config.UidMappings, create(m))
 		}

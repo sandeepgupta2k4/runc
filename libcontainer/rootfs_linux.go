@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/pkg/mount"
-	"github.com/docker/docker/pkg/symlink"
+	"github.com/cyphar/filepath-securejoin"
 	"github.com/mrunalp/fileutils"
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/configs"
+	"github.com/opencontainers/runc/libcontainer/mount"
 	"github.com/opencontainers/runc/libcontainer/system"
 	libcontainerUtils "github.com/opencontainers/runc/libcontainer/utils"
 	"github.com/opencontainers/selinux/go-selinux/label"
@@ -100,8 +100,10 @@ func prepareRootfs(pipe io.ReadWriter, iConfig *initConfig) (err error) {
 
 	if config.NoPivotRoot {
 		err = msMoveRoot(config.Rootfs)
-	} else {
+	} else if config.Namespaces.Contains(configs.NEWNS) {
 		err = pivotRoot(config.Rootfs)
+	} else {
+		err = chroot(config.Rootfs)
 	}
 	if err != nil {
 		return newSystemErrorWithCause(err, "jailing process inside rootfs")
@@ -240,7 +242,7 @@ func mountToRootfs(m *configs.Mount, rootfs, mountLabel string) error {
 		// any previous mounts can invalidate the next mount's destination.
 		// this can happen when a user specifies mounts within other mounts to cause breakouts or other
 		// evil stuff to try to escape the container's rootfs.
-		if dest, err = symlink.FollowSymlinkInScope(dest, rootfs); err != nil {
+		if dest, err = securejoin.SecureJoin(rootfs, m.Destination); err != nil {
 			return err
 		}
 		if err := checkMountDestination(rootfs, dest); err != nil {
@@ -328,7 +330,7 @@ func mountToRootfs(m *configs.Mount, rootfs, mountLabel string) error {
 		// this can happen when a user specifies mounts within other mounts to cause breakouts or other
 		// evil stuff to try to escape the container's rootfs.
 		var err error
-		if dest, err = symlink.FollowSymlinkInScope(dest, rootfs); err != nil {
+		if dest, err = securejoin.SecureJoin(rootfs, m.Destination); err != nil {
 			return err
 		}
 		if err := checkMountDestination(rootfs, dest); err != nil {
@@ -702,6 +704,10 @@ func msMoveRoot(rootfs string) error {
 	if err := unix.Mount(rootfs, "/", "", unix.MS_MOVE, ""); err != nil {
 		return err
 	}
+	return chroot(rootfs)
+}
+
+func chroot(rootfs string) error {
 	if err := unix.Chroot("."); err != nil {
 		return err
 	}
@@ -772,10 +778,10 @@ func remountReadonly(m *configs.Mount) error {
 // mounts ( proc/kcore ).
 // For files, maskPath bind mounts /dev/null over the top of the specified path.
 // For directories, maskPath mounts read-only tmpfs over the top of the specified path.
-func maskPath(path string) error {
+func maskPath(path string, mountLabel string) error {
 	if err := unix.Mount("/dev/null", path, "", unix.MS_BIND, ""); err != nil && !os.IsNotExist(err) {
 		if err == unix.ENOTDIR {
-			return unix.Mount("tmpfs", path, "tmpfs", unix.MS_RDONLY, "")
+			return unix.Mount("tmpfs", path, "tmpfs", unix.MS_RDONLY, label.FormatMountLabel("", mountLabel))
 		}
 		return err
 	}
